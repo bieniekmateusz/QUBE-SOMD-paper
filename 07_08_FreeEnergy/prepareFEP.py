@@ -8,41 +8,36 @@
 # # PrepareFEP
 # Loads a pair of input files, perform mapping between the first molecule of each input. Write down input files for a SOMD FEP calculation.
 
-# In[1]:
-
-
 import BioSimSpace as BSS
 import os
 from Sire.Mol import AtomIdx
+import shutil
 
 
-# In[2]:
 
-
-def writeLog(ligA, ligB, mapping):
+def writeLog(ligA, ligB, mapping, output):
     """ Human readable report on atoms used for the mapping."""
     atoms_in_A = list(mapping.keys())
-    stream = open('somd.mapping','w')
+    stream = open(output,'w')
     atAdone = []
     atBdone= []
     for atAidx in atoms_in_A:
-        atA = ligA._sire_molecule.select(atAidx)
-        atB = ligB._sire_molecule.select(mapping[atAidx])
+        # breakpoint()
+        # import ipdb ; ipdb.set_trace()
+        atA = ligA._getSireObject().select(AtomIdx(atAidx))
+        atB = ligB._getSireObject().select(AtomIdx(mapping[atAidx]))
         stream.write("%s %s --> %s %s\n" % (atA.index(), atA.name(),atB.index(), atB.name()))
         atAdone.append(atA)
         atBdone.append(atB)
-    for atom in ligA._sire_molecule.atoms():
+    for atom in ligA._getSireObject().atoms():
         if atom in atAdone:
             continue
         stream.write("%s %s --> dummy\n" % (atom.index(), atom.name()))
-    for atom in ligB._sire_molecule.atoms():
+    for atom in ligB._getSireObject().atoms():
         if atom in atBdone:
             continue
         stream.write("dummy --> %s %s\n" % (atom.index(), atom.name()))
     stream.close()
-
-
-# In[3]:
 
 
 def loadMapping(mapping_file):
@@ -62,21 +57,10 @@ def loadMapping(mapping_file):
     return mapping
 
 
-# In[4]:
-
-
 node = BSS.Gateway.Node("A node to generate input files for a SOMD relative free energy calculation.")
-
-
-# In[5]:
-
 
 node.addAuthor(name="Julien Michel", email="julien.michel@ed.ac.uk", affiliation="University of Edinburgh")
 node.setLicense("GPLv3")
-
-
-# In[6]:
-
 
 node.addInput("input1", BSS.Gateway.FileSet(help="A topology and coordinates file"))
 node.addInput("input2", BSS.Gateway.FileSet(help="A topology and coordinates file"))
@@ -84,33 +68,15 @@ node.addInput("prematch", BSS.Gateway.String(help="list of atom indices that are
 node.addInput("mapping", BSS.Gateway.File(help="csv file that contains atom indices in input1 mapped ot atom indices in input2", optional=True))
 node.addInput("output", BSS.Gateway.String(help="The root name for the files describing the perturbation input1->input2."))
 
-
-# In[7]:
-
-
 node.addOutput("nodeoutput", BSS.Gateway.FileSet(help="SOMD input files for a perturbation of input1->input2."))
-
-
-# In[8]:
-
 
 node.showControls()
 
-
-# In[9]:
-
-
 do_mapping = True
 custom_mapping = node.getInput("mapping")
-#print (custom_mapping)
 if custom_mapping is not None:
     do_mapping = False
     mapping = loadMapping(custom_mapping)
-    #print (mapping)
-
-
-# In[10]:
-
 
 # Optional input, dictionary of Atom indices that should be matched in the search. 
 prematch = {}
@@ -120,60 +86,27 @@ if len(prematchstring) > 0:
     for entry in entries:
         idxA, idxB = entry.split("-")
         prematch[ AtomIdx( int(idxA)) ] = AtomIdx( int(idxB) )
-#print (prematch)
-
-
-# In[11]:
-
 
 # Load system 1
 system1 = BSS.IO.readMolecules(node.getInput("input1"))
-
-
-# In[12]:
-
-
 # Load system 2
 system2 = BSS.IO.readMolecules(node.getInput("input2"))
-
-
-# In[13]:
-
 
 # We assume the molecules to perturb are the first molecules in each system
 lig1 = system1.getMolecules()[0]
 lig2 = system2.getMolecules()[0]
-
-
-# In[14]:
-
 
 if do_mapping:
     # Return a maximum of 10 matches, scored by RMSD and sorted from best to worst.
     mappings, scores = BSS.Align.matchAtoms(lig1, lig2, matches=10, prematch=prematch, return_scores=True, scoring_function="RMSDalign", timeout=10*BSS.Units.Time.second)
     # We retain the top mapping
     mapping = mappings[0]
-    #print (len(mappings))
-    #print (mappings)
-
-
-# In[15]:
-
 
 #print (mapping)
 #for x in range(0,len(mappings)):
 #    print (mappings[x], scores[x])
 
-
-# In[16]:
-
-
 inverted_mapping = dict([[v,k] for k,v in mapping.items()])
-#print (inverted_mapping)
-
-
-# In[17]:
-
 
 # Align lig2 to lig1 based on the best mapping (inverted). The molecule is aligned based
 # on a root mean squared displacement fit to find the optimal translation vector
@@ -185,54 +118,36 @@ merged = BSS.Align.merge(lig1, lig2, mapping)
 system1.removeMolecules(lig1)
 system1.addMolecules(merged)
 
-
-# In[18]:
-
+root = node.getInput("output")
+mapping_str = "%s.mapping" % root
 
 # Log the mapping used
-writeLog(lig1, lig2, mapping)
-BSS.IO.saveMolecules("merged_at_lam0.pdb", merged, "PDB", { "coordinates" : "coordinates0" , "element": "element0" })
+writeLog(lig1, lig2, mapping, output=mapping_str)
+BSS.IO.saveMolecules(f"{root}.mergeat0.pdb", merged, "pdb", { "coordinates" : "coordinates0" })
+# BSS.IO.saveMolecules("merged_at_lam0.pdb", merged, "pdb", { "coordinates" : "coordinates0" , "element": "element0" })
 # Generate package specific input
-protocol = BSS.Protocol.FreeEnergy(runtime = 2*BSS.Units.Time.femtosecond, num_lam=3)
+protocol = BSS.Protocol.FreeEnergy(runtime = 2*BSS.Units.Time.nanosecond, num_lam=3)
+#protocol = BSS.Protocol.FreeEnergy(runtime = 2*BSS.Units.Time.femtosecond, num_lam=3)
 process = BSS.Process.Somd(system1, protocol)
-process.getOutput()
-cmd = "unzip -o somd.zip"
-os.system(cmd)
+process.getOutput() # creates the .zip? 
+shutil.move('somd_output.zip', f'{root}.zip')
 
-
-# In[19]:
-
+# we copy them directl from _work_dir ?
+# cmd = "unzip -o somd_output.zip"
+# os.system(cmd)
 
 root = node.getInput("output")
-mergedpdb = "%s.mergeat0.pdb" % root
 pert = "%s.pert" % root
 prm7 = "%s.prm7" % root
 rst7 = "%s.rst7" % root
-mapping_str = "%s.mapping" % root
 
-
-# In[20]:
-
-
-cmd = "mv merged_at_lam0.pdb %s ; mv somd.pert %s ; mv somd.prm7 %s ; mv somd.rst7 %s ; mv somd.mapping %s ; rm somd.zip ; rm somd.cfg ; rm somd.err; rm somd.out" % (mergedpdb,pert,prm7,rst7,mapping_str)
-#print (cmd)
+# fixme - shutil? 
+cmd = f"""  mv {process._work_dir}/somd.pert {pert} ; 
+            mv {process._work_dir}/somd.prm7 {prm7} ; 
+            mv {process._work_dir}/somd.rst7 {rst7} ; 
+       """
 os.system(cmd)
 
 
-# In[21]:
-
-
-node.setOutput("nodeoutput",[mergedpdb, pert, prm7, rst7, mapping_str])
-
-
-# In[22]:
-
-
+node.setOutput("nodeoutput",[pert, prm7, rst7, mapping_str])
 node.validate()
-
-
-# In[ ]:
-
-
-
-
